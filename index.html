@@ -2,25 +2,47 @@
 <html lang="ja">
 <head>
   <meta charset="UTF-8">
-  <title>P2Pファイル共有</title>
+  <title>ファイル共有サービス「eeeBOX」</title>
   <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
   <style>
     body { font-family: 'Helvetica Neue', Arial, sans-serif; padding: 30px; background: #f5f7fa; color: #333; user-select: none; -webkit-user-select: none; }
     .container { max-width: 600px; margin: 0 auto; background: white; padding: 25px; border-radius: 10px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
     .section { margin-bottom: 20px; padding: 15px; border: 1px solid #e2e8f0; border-radius: 6px; background: #fafbff; }
-    input[type="text"], input[type="file"] { width: 100%; padding: 10px; margin-top: 5px; border: 1px solid #cbd5e1; border-radius: 4px; box-sizing: border-box; }
+    input[type="text"], input[type="file"], textarea { width: 100%; padding: 10px; margin-top: 5px; border: 1px solid #cbd5e1; border-radius: 4px; box-sizing: border-box; }
+    textarea { resize: vertical; min-height: 60px; font-family: inherit; }
     button { background: #3b82f6; color: white; border: none; padding: 10px 20px; margin-top: 10px; border-radius: 4px; cursor: pointer; font-weight: bold; width: 100%; }
     button:hover { background: #2563eb; }
     button:disabled { background: #94a3b8; cursor: not-allowed; }
     #status { font-weight: bold; color: #475569; }
     #progressText { margin-top: 10px; color: #2563eb; font-weight: bold; font-size: 1.1em; }
+    
+    /* チャットエリアのスタイル */
+    #chatHistory { height: 200px; overflow-y: auto; border: 1px solid #cbd5e1; background: white; padding: 10px; border-radius: 4px; margin-top: 10px; }
+    .chat-msg { margin-bottom: 10px; padding: 8px 12px; border-radius: 6px; max-width: 85%; word-break: break-all; white-space: pre-wrap; line-height: 1.4; }
+    .chat-msg.me { background: #dbeafe; color: #1e40af; margin-left: auto; text-align: left; }
+    .chat-msg.peer { background: #f1f5f9; color: #334155; margin-right: auto; }
+    
+    /* 履歴エリアのスタイル */
+    #historyList { max-height: 150px; overflow-y: auto; margin-top: 10px; padding-left: 20px; }
+    #historyList li { margin-bottom: 5px; font-size: 0.9em; color: #475569; }
   </style>
 </head>
 <body>
 
 <div class="container">
-  <h2>P2Pファイル共有</h2>
+  <h2>eeeBOX</h2>
   <p style="font-size: 0.9em; color: #64748b;">※トラブルや切断時は自動で最初の画面に戻ります。</p>
+
+  <div class="section" style="text-align: center; background: #fff8e1; border: 1px solid #ffe082; padding: 15px; border-radius: 6px; margin-bottom: 15px;">
+    <p style="margin: 0 0 10px 0; font-size: 0.9rem; color: #e65100; font-weight: bold;">🎁 開発者を応援する（匿名で送れます）</p>
+    <p style="margin: 0 0 12px 0; font-size: 0.8rem; color: #666; line-height: 1.4;">
+      サイトを気に入ったら、Amazonギフトカード（15円〜）でジュースをおごっていただけると励みになります！<br>
+      宛先メールアドレス：<strong id="target-email" style="color: #007bff; background: #fff; padding: 2px 5px; border: 1px solid #ccc; border-radius: 3px; cursor: pointer;" title="クリックでコピー">kaminoeee@gmail.com</strong>
+    </p>
+    <button id="amajif-btn" style="background: #ff9900; color: white; margin-top: 0;">
+      アドレスをコピーしてAmazonを開く ↗
+    </button>
+  </div>
 
   <div class="section" id="loginSection">
     <label for="roomIdInput">部屋番号を入力：</label>
@@ -39,16 +61,27 @@
     <button id="sendBtn">送信を開始</button>
   </div>
 
+  <div class="section" id="chatSection" style="display:none;">
+    <h3>リアルタイムチャット</h3>
+    <p style="font-size: 0.8em; color: #64748b; margin: 0;">※Enterで送信、Shift+Enterで改行します</p>
+    <div id="chatHistory"></div>
+    <textarea id="chatInput" placeholder="メッセージを入力..."></textarea>
+    <button id="chatSendBtn" style="background: #10b981;">メッセージ送信</button>
+  </div>
+
   <div class="section" id="progressSection" style="display:none;">
     <h3>送受信の進捗</h3>
     <p id="progressText">待機中...</p>
   </div>
+
+  <div class="section" id="historySection" style="display:none;">
+    <h3>送受信履歴</h3>
+    <ul id="historyList"></ul>
+  </div>
 </div>
 
 <script>
-  // ==========================================
-  // 【お守り】ソースコード表示・コピー対策
-  // ==========================================
+
   document.addEventListener('contextmenu', (e) => e.preventDefault());
   document.addEventListener('keydown', (e) => {
     if (e.key === 'F12' || 
@@ -60,9 +93,23 @@
     }
   });
 
-  // ==========================================
-  // P2P 安定化＆自動初期化ロジック
-  // ==========================================
+
+  const emailElem = document.getElementById('target-email');
+  const amajifBtn = document.getElementById('amajif-btn');
+  const emailText = "kaminoeee@gmail.com";
+
+  function copyAndOpenAmazon() {
+    navigator.clipboard.writeText(emailText).then(() => {
+      alert("メールアドレスをコピーしました！Amazonのページを開きます。");
+      window.open("https://www.amazon.co.jp/dp/B004N3APRE", "_blank");
+    }).catch(() => {
+      alert("コピーに失敗しました。手動でコピーしてください: " + emailText);
+    });
+  }
+  emailElem.onclick = copyAndOpenAmazon;
+  amajifBtn.onclick = copyAndOpenAmazon;
+
+
   let peer = null;
   let conn = null;
   const CHUNK_SIZE = 16384; // 16KB
@@ -76,12 +123,19 @@
   const fileInput = document.getElementById('fileInput');
   const sendBtn = document.getElementById('sendBtn');
   const progressText = document.getElementById('progressText');
+  
+  // 新規要素
+  const chatSection = document.getElementById('chatSection');
+  const chatHistory = document.getElementById('chatHistory');
+  const chatInput = document.getElementById('chatInput');
+  const chatSendBtn = document.getElementById('chatSendBtn');
+  const historySection = document.getElementById('historySection');
+  const historyList = document.getElementById('historyList');
 
   // 【核心】すべてを完全に初期化する関数
   function resetSystem(message) {
     console.log("初期化発火:", message);
     
-    // 通信オブジェクトを確実にキル
     if (conn) { 
       try { conn.close(); } catch(e){} 
       conn = null; 
@@ -94,6 +148,7 @@
     // 画面を最初期状態に戻す
     loginSection.style.display = 'block';
     shareSection.style.display = 'none';
+    chatSection.style.display = 'none';
     progressSection.style.display = 'none';
     connectBtn.disabled = false;
     roomIdInput.disabled = false;
@@ -112,21 +167,18 @@
     roomIdInput.disabled = true;
     statusText.innerText = 'シグナリングサーバーに接続中...';
 
-    // 自分がホスト（部屋作成者）として起動
     peer = new Peer(roomId, { debug: 1 });
 
     peer.on('open', () => {
       statusText.innerText = `部屋（${roomId}）を作成しました。相手の入室を待っています...`;
     });
 
-    // 相手が入ってきたとき
     peer.on('connection', (connection) => {
       if (conn) return; 
       conn = connection;
       setupConnection();
     });
 
-    // 部屋が既にあった（先客がいた）場合はゲストとして入り直す
     peer.on('error', (err) => {
       if (err.type === 'unavailable-id') {
         statusText.innerText = '先客を検知しました。ゲストとして入室します...';
@@ -146,8 +198,45 @@
     });
   };
 
+  function addHistory(type, name, size) {
+    historySection.style.display = 'block';
+    const li = document.createElement('li');
+    const now = new Date();
+    const timeStr = `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}`;
+    li.innerText = `[${timeStr}] 【${type}】 ${name} (${(size/1024/1024).toFixed(2)} MB)`;
+    historyList.appendChild(li);
+    historyList.scrollTop = historyList.scrollHeight;
+  }
+
+  function appendChatMessage(sender, text) {
+    const msgDiv = document.createElement('div');
+    msgDiv.classList.add('chat-msg', sender);
+    msgDiv.textContent = text; // textContentを使うことでHTMLタグを無効化（安全対策）
+    chatHistory.appendChild(msgDiv);
+    chatHistory.scrollTop = chatHistory.scrollHeight;
+  }
+
+  function sendChatMessage() {
+    const text = chatInput.value;
+    if (!text.replace(/\s/g, '') || !conn) return; 
+
+    conn.send({ type: 'chat-text', message: text });
+    appendChatMessage('me', text);
+    chatInput.value = '';
+  }
+
+  // ボタンクリック送信
+  chatSendBtn.onclick = sendChatMessage;
+
+  // Enterで送信、Shift+Enterで改行
+  chatInput.onkeydown = function(e) {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault(); // 本来の改行動作を止める
+      sendChatMessage();
+    }
+  };
+
   function setupConnection() {
-    // 【重要】回線落ち・切断・離脱を検知したら即リセット
     conn.on('close', () => {
       resetSystem('回線が切断されたか、相手が退出したため初期化しました。');
     });
@@ -157,7 +246,6 @@
 
     conn.on('open', () => {
       statusText.innerText = 'ステータス: 同期中...';
-      // 相互接続を確定させるための合図
       conn.send({ type: 'system-ping' });
     });
 
@@ -166,17 +254,22 @@
     let receivedSize = 0;
 
     conn.on('data', (data) => {
-      // 接続同期シグナルの処理
       if (data && data.type === 'system-ping') {
         loginSection.style.display = 'none';
         shareSection.style.display = 'block';
+        chatSection.style.display = 'block'; // チャット表示
         progressSection.style.display = 'block';
         statusText.innerText = 'ステータス: 双方向P2P接続完了！';
         progressText.innerText = '接続されました。ファイルを送信するか、相手からの送信を待ってください。';
         return;
       }
 
-      // ファイル情報受信
+      // チャットテキストの受信処理
+      if (data && data.type === 'chat-text') {
+        appendChatMessage('peer', data.message);
+        return;
+      }
+
       if (data && data.type === 'meta') {
         fileMeta = data.info;
         receivedChunks = [];
@@ -185,7 +278,6 @@
         return;
       }
 
-      // ファイル送信完了
       if (data === '===EOF===') {
         progressText.innerText = 'ファイルを組み立て中...';
         
@@ -202,6 +294,7 @@
             document.body.removeChild(a);
             
             progressText.innerText = `受信完了: ${fileMeta.name}`;
+            addHistory('受信', fileMeta.name, fileMeta.size); // 履歴追加
             receivedChunks = [];
             URL.revokeObjectURL(url);
           } catch(e) {
@@ -211,7 +304,6 @@
         return;
       }
 
-      // 破片を蓄積
       receivedChunks.push(data);
       receivedSize += data.byteLength || data.size || 0;
       
@@ -222,7 +314,6 @@
     });
   }
 
-  // 送信処理
   sendBtn.addEventListener('click', () => {
     const file = fileInput.files[0];
     if (!file || !conn) return alert('ファイルを選択してください');
@@ -255,6 +346,7 @@
         setTimeout(() => {
           if (conn) conn.send('===EOF===');
           progressText.innerText = '送信完了しました！';
+          addHistory('送信', file.name, file.size); // 履歴追加
           sendBtn.disabled = false;
         }, 500);
       }
