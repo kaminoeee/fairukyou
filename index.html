@@ -2,7 +2,7 @@
 <html lang="ja">
 <head>
   <meta charset="UTF-8">
-  <title>P2Pファイル共有（自動初期化・安定版）</title>
+  <title>P2Pファイル共有</title>
   <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
   <style>
     body { font-family: 'Helvetica Neue', Arial, sans-serif; padding: 30px; background: #f5f7fa; color: #333; user-select: none; -webkit-user-select: none; }
@@ -19,8 +19,8 @@
 <body>
 
 <div class="container">
-  <h2>P2Pファイル共有（自動初期化・安定版）</h2>
-  <p style="font-size: 0.9em; color: #64748b;">※回線切断や相手が退出した場合は自動で最初の画面に戻ります。</p>
+  <h2>P2Pファイル共有</h2>
+  <p style="font-size: 0.9em; color: #64748b;">※トラブルや切断時は自動で最初の画面に戻ります。</p>
 
   <div class="section" id="loginSection">
     <label for="roomIdInput">部屋番号を入力：</label>
@@ -77,19 +77,27 @@
   const sendBtn = document.getElementById('sendBtn');
   const progressText = document.getElementById('progressText');
 
-  // システム全体を最初期状態に戻す「初期化」関数
+  // 【核心】すべてを完全に初期化する関数
   function resetSystem(message) {
-    // 既存の通信をすべて物理的に破壊
-    if (conn) { conn.close(); conn = null; }
-    if (peer) { peer.destroy(); peer = null; }
+    console.log("初期化発火:", message);
+    
+    // 通信オブジェクトを確実にキル
+    if (conn) { 
+      try { conn.close(); } catch(e){} 
+      conn = null; 
+    }
+    if (peer) { 
+      try { peer.destroy(); } catch(e){} 
+      peer = null; 
+    }
 
-    // 画面の表示をリセット
+    // 画面を最初期状態に戻す
     loginSection.style.display = 'block';
     shareSection.style.display = 'none';
     progressSection.style.display = 'none';
     connectBtn.disabled = false;
     roomIdInput.disabled = false;
-    fileInput.value = ""; // 選択中ファイルをクリア
+    fileInput.value = ""; 
     sendBtn.disabled = false;
     
     statusText.innerText = "状態: " + (message || "初期化されました。再度入室してください。");
@@ -104,57 +112,52 @@
     roomIdInput.disabled = true;
     statusText.innerText = 'シグナリングサーバーに接続中...';
 
-    // ホスト（作成者）として部屋番号のIDで接続
+    // 自分がホスト（部屋作成者）として起動
     peer = new Peer(roomId, { debug: 1 });
 
     peer.on('open', () => {
       statusText.innerText = `部屋（${roomId}）を作成しました。相手の入室を待っています...`;
     });
 
-    // 相手（ゲスト）が入室してきた時（自分＝ホスト）
+    // 相手が入ってきたとき
     peer.on('connection', (connection) => {
-      if (conn) return; // 既に誰かと繋がっていれば無視
+      if (conn) return; 
       conn = connection;
       setupConnection();
     });
 
-    // エラーハンドリング（既に部屋が存在する場合＝自分はゲストになる）
+    // 部屋が既にあった（先客がいた）場合はゲストとして入り直す
     peer.on('error', (err) => {
       if (err.type === 'unavailable-id') {
-        statusText.innerText = '先客を検知しました。ゲストとして入室を試みます...';
+        statusText.innerText = '先客を検知しました。ゲストとして入室します...';
         
-        // 自分のIDをランダムにして再生成
         peer = new Peer({ debug: 1 });
         peer.on('open', () => {
-          // ホストに接続を仕掛ける
           conn = peer.connect(roomId, { reliable: true });
           setupConnection();
         });
         
         peer.on('error', (gErr) => {
-          resetSystem('ゲスト接続エラーが発生しました。: ' + gErr.type);
+          resetSystem('接続に失敗しました。時間をおいてやり直してください。');
         });
       } else {
-        resetSystem('エラーが発生したため初期化しました: ' + err.type);
+        resetSystem('切断またはエラーが起きたため初期化しました。');
       }
     });
   };
 
-  // 接続が繋がったあとの双方向通信＆切断監視処理
   function setupConnection() {
-    // 相手が切断した時の監視（通常の切断）
+    // 【重要】回線落ち・切断・離脱を検知したら即リセット
     conn.on('close', () => {
-      resetSystem('相手が退出したか、接続が切れました。ルームを初期化しました。');
+      resetSystem('回線が切断されたか、相手が退出したため初期化しました。');
     });
-
-    // エラーで落ちた時の監視
     conn.on('error', (err) => {
       resetSystem('通信エラーが発生したため初期化しました。');
     });
 
     conn.on('open', () => {
-      statusText.innerText = 'ステータス: P2P接続中（同期を確認しています...）';
-      // 双方向で確実に繋ぐため、接続がオープンしたらお互いに「PING」を送り合う
+      statusText.innerText = 'ステータス: 同期中...';
+      // 相互接続を確定させるための合図
       conn.send({ type: 'system-ping' });
     });
 
@@ -162,19 +165,18 @@
     let fileMeta = null;
     let receivedSize = 0;
 
-    // データ受信
     conn.on('data', (data) => {
-      // 【バグ対策】双方向同期のためのシステムメッセージ処理
+      // 接続同期シグナルの処理
       if (data && data.type === 'system-ping') {
         loginSection.style.display = 'none';
         shareSection.style.display = 'block';
         progressSection.style.display = 'block';
-        statusText.innerText = 'ステータス: 双方向P2P接続完了！送受信可能です。';
-        progressText.innerText = 'お互いの接続を確認しました。ファイルの選択を待っています。';
+        statusText.innerText = 'ステータス: 双方向P2P接続完了！';
+        progressText.innerText = '接続されました。ファイルを送信するか、相手からの送信を待ってください。';
         return;
       }
 
-      // 1. ファイルのメタデータを受信
+      // ファイル情報受信
       if (data && data.type === 'meta') {
         fileMeta = data.info;
         receivedChunks = [];
@@ -183,9 +185,9 @@
         return;
       }
 
-      // 2. 終了合図を受信
+      // ファイル送信完了
       if (data === '===EOF===') {
-        progressText.innerText = 'ダウンロードファイルを生成中...';
+        progressText.innerText = 'ファイルを組み立て中...';
         
         setTimeout(() => {
           try {
@@ -199,8 +201,7 @@
             a.click();
             document.body.removeChild(a);
             
-            progressText.innerText = `受信完了・自動保存しました: ${fileMeta.name}`;
-            
+            progressText.innerText = `受信完了: ${fileMeta.name}`;
             receivedChunks = [];
             URL.revokeObjectURL(url);
           } catch(e) {
@@ -210,7 +211,7 @@
         return;
       }
 
-      // 3. 通常のデータ受信
+      // 破片を蓄積
       receivedChunks.push(data);
       receivedSize += data.byteLength || data.size || 0;
       
@@ -221,7 +222,7 @@
     });
   }
 
-  // 送信側の処理
+  // 送信処理
   sendBtn.addEventListener('click', () => {
     const file = fileInput.files[0];
     if (!file || !conn) return alert('ファイルを選択してください');
@@ -230,14 +231,13 @@
     let offset = 0;
     const reader = new FileReader();
 
-    // 最初に対象ファイルの情報を送信
     conn.send({
       type: 'meta',
       info: { name: file.name, size: file.size, type: file.type }
     });
 
     reader.onload = function(e) {
-      if (!conn) return; // すでに初期化されていれば中止
+      if (!conn) return; 
       
       conn.send(e.target.result);
       offset += e.target.result.byteLength;
