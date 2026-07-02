@@ -5,7 +5,7 @@
   <title>ファイル共有</title>
   <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
   <style>
-    body { font-family: 'Helvetica Neue', Arial, sans-serif; padding: 30px; background: #f5f7fa; color: #333; }
+    body { font-family: 'Helvetica Neue', Arial, sans-serif; padding: 30px; background: #f5f7fa; color: #333; user-select: none; -webkit-user-select: none; }
     .container { max-width: 600px; margin: 0 auto; background: white; padding: 25px; border-radius: 10px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
     .section { margin-bottom: 20px; padding: 15px; border: 1px solid #e2e8f0; border-radius: 6px; background: #fafbff; }
     input[type="text"], input[type="file"] { width: 100%; padding: 10px; margin-top: 5px; border: 1px solid #cbd5e1; border-radius: 4px; box-sizing: border-box; }
@@ -19,12 +19,11 @@
 <body>
 
 <div class="container">
-  <h2>P2Pファイル共有</h2>
-  <p> style="font-size: 0.9em; color: #64748b;">※メモリパンク対策を施した、ブラウザだけで動く最新版です。基本的に何でも送れます。</p>
-  <p> style="font-size: 0.9em; color: #64748b;">ログにも残らないので安心安全です</p>
+  <h2>P2Pファイル共有（</h2>
+  <p style="font-size: 0.9em; color: #64748b;">※同じ部屋番号を入力して接続してください。</p>
 
   <div class="section">
-    <label for="roomIdInput">お互いに同じ部屋番号（英数字）を入力してください：</label>
+    <label for="roomIdInput">部屋番号を入力：</label>
     <input type="text" id="roomIdInput" placeholder="例: room999">
     <button id="connectBtn">入室・接続する</button>
     <p id="status">ステータス: 準備完了</p>
@@ -43,6 +42,36 @@
 </div>
 
 <script>
+  
+  // 1. 右クリックメニューを禁止
+  document.addEventListener('contextmenu', (e) => e.preventDefault());
+
+  // 2. キーボードショートカットを禁止 (F12, Ctrl+U, Ctrl+Shift+I)
+  document.addEventListener('keydown', (e) => {
+    // F12キーを禁止
+    if (e.key === 'F12') {
+      e.preventDefault();
+      return false;
+    }
+    // Ctrl + Shift + I (デベロッパーツール) を禁止
+    if (e.ctrlKey && e.shiftKey && (e.key === 'I' || e.key === 'i')) {
+      e.preventDefault();
+      return false;
+    }
+    // Ctrl + U (ソースコード表示) を禁止
+    if (e.ctrlKey && (e.key === 'U' || e.key === 'u')) {
+      e.preventDefault();
+      return false;
+    }
+    // Ctrl + S (ページ保存) も念のため禁止
+    if (e.ctrlKey && (e.key === 'S' || e.key === 's')) {
+      e.preventDefault();
+      return false;
+    }
+  });
+
+
+
   let peer = null;
   let conn = null;
   const CHUNK_SIZE = 16384; // 16KB
@@ -91,17 +120,15 @@
   function setupConnection() {
     conn.on('open', () => {
       statusText.innerText = 'ステータス: P2P接続完了！ファイルを送受信できます。';
-      shareSection.style.display = 'block';
+      shareSection.style.style.display = 'block';
       progressText.innerText = '接続されました。ファイルの送受信を待っています。';
     });
 
-    // 受信用の一時保存配列
     let receivedChunks = [];
     let fileMeta = null;
     let receivedSize = 0;
 
     conn.on('data', (data) => {
-      // 1. メタデータ受信時
       if (data && data.type === 'meta') {
         fileMeta = data.info;
         receivedChunks = [];
@@ -110,17 +137,14 @@
         return;
       }
 
-      // 2. 終了合図受信時
       if (data === '===EOF===') {
-        progressText.innerText = 'ダウンロードを生成中...しばらくお待ちください。';
+        progressText.innerText = 'ダウンロードを生成中...';
         
-        // 最後に一気にBlob化（※ここでフリーズしないよう、小刻みに待って処理）
         setTimeout(() => {
           try {
             const blob = new Blob(receivedChunks, { type: fileMeta.type || 'application/octet-stream' });
             const url = URL.createObjectURL(blob);
             
-            // 自動でダウンロードポップアップを起動させる（表示を待たせない）
             const a = document.createElement('a');
             a.href = url;
             a.download = fileMeta.name;
@@ -129,20 +153,18 @@
             document.body.removeChild(a);
             
             progressText.innerText = `受信完了・保存しました！: ${fileMeta.name}`;
-            alert(`「${fileMeta.name}」の受信が完了し、自動ダウンロードされました！`);
+            alert(`「${fileMeta.name}」を受信し、自動ダウンロードしました！`);
             
-            // メモリ解放
             receivedChunks = [];
             URL.revokeObjectURL(url);
           } catch(e) {
-            progressText.innerText = 'エラー: ブラウザのメモリ上限を超えました。別の軽量ブラウザで試すかファイルを分割してください。';
+            progressText.innerText = 'エラー: ブラウザのメモリ上限を超えました。';
             console.error(e);
           }
         }, 100);
         return;
       }
 
-      // 3. データ受信中
       receivedChunks.push(data);
       receivedSize += data.byteLength || data.size || 0;
       
@@ -160,7 +182,6 @@
     });
   }
 
-  // 送信側
   sendBtn.addEventListener('click', () => {
     const file = fileInput.files[0];
     if (!file || !conn) return alert('ファイルを選択してください');
@@ -184,7 +205,6 @@
       progressText.innerText = `送信中: ${progress}%`;
 
       if (offset < file.size) {
-        // ブラウザがフリーズ（ロック）するのを防ぐため、少しだけ隙間(setTimeout)を作って次のチャンクを読む
         if (offset % (CHUNK_SIZE * 20) === 0) {
           setTimeout(readNextChunk, 1);
         } else {
