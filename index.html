@@ -2,7 +2,7 @@
 <html lang="ja">
 <head>
   <meta charset="UTF-8">
-  <title>完全サーバーレス P2Pファイル共有</title>
+  <title>ファイル共有</title>
   <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
   <style>
     body { font-family: 'Helvetica Neue', Arial, sans-serif; padding: 30px; background: #f5f7fa; color: #333; }
@@ -13,15 +13,14 @@
     button:hover { background: #2563eb; }
     button:disabled { background: #94a3b8; cursor: not-allowed; }
     #status { font-weight: bold; color: #475569; }
-    ul { padding-left: 20px; }
-    li { margin-bottom: 8px; }
+    #progressText { margin-top: 10px; color: #2563eb; font-weight: bold; font-size: 1.1em; }
   </style>
 </head>
 <body>
 
 <div class="container">
-  <h2>P2Pファイル共有（部屋番号制）</h2>
-  <p style="font-size: 0.9em; color: #64748b;">※ターミナル不要。このHTMLファイルを開くだけで通信できます。</p>
+  <h2>P2Pファイル共有（</h2>
+  <p style="font-size: 0.9em; color: #64748b;">※メモリパンク対策を施した、ブラウザだけで動く最新版です。</p>
 
   <div class="section">
     <label for="roomIdInput">お互いに同じ部屋番号（英数字）を入力してください：</label>
@@ -34,19 +33,18 @@
     <h3>ファイルを送信</h3>
     <input type="file" id="fileInput">
     <button id="sendBtn">送信を開始</button>
-    <p id="progressText" style="margin-top: 10px; color: #2563eb; font-weight: bold;"></p>
   </div>
 
   <div class="section">
-    <h3>受信したファイル</h3>
-    <ul id="downloadList"></ul>
+    <h3>現在の状況 / 進捗</h3>
+    <p id="progressText">待機中...</p>
   </div>
 </div>
 
 <script>
   let peer = null;
   let conn = null;
-  const CHUNK_SIZE = 16384; // 16KBずつ分割して送信（大容量対応）
+  const CHUNK_SIZE = 16384; // 16KB
 
   const connectBtn = document.getElementById('connectBtn');
   const roomIdInput = document.getElementById('roomIdInput');
@@ -55,63 +53,7 @@
   const fileInput = document.getElementById('fileInput');
   const sendBtn = document.getElementById('sendBtn');
   const progressText = document.getElementById('progressText');
-  const downloadList = document.getElementById('downloadList');
 
-  // 「入室・接続する」ボタンを押したとき
-  connectBtn.addEventListener('click', () => {
-    const roomId = roomIdInput.value.trim();
-    if (!roomId) return alert('部屋番号を入力してください');
-
-    connectBtn.disabled = true;
-    roomIdInput.disabled = true;
-    statusText.innerText = 'シグナリングサーバーに接続中...';
-
-    // 部屋番号をベースにして、自分用のランダムなIDを作成
-    const myId = roomId + '_' + Math.random().toString(36).substring(2, 9);
-    
-    // 無料の公開PeerJSサーバーを利用して初期化
-    peer = new Peer(myId, {
-      debug: 1
-    });
-
-    peer.on('open', (id) => {
-      statusText.innerText = '部屋をスキャン中... 相手を探しています。';
-      
-      // 公開サーバーの「部屋（同一ID）」の仕組みを模倣するため、
-      // 相手のID（同じ部屋番号で始まる別のID）を手当たり次第に探すか、
-      // ここではシンプルに「相手からの接続を待つ」と「自分から接続を試みる」を同時に行います。
-      // ※簡易的に、数秒待って相手が来なければ自分から接続を仕掛けにいきます。
-      setTimeout(() => {
-        if (!conn) {
-          // 部屋番号をもとに、相手がすでに待機していると仮定して接続を試みる
-          // （PeerJSの仕様上、同じ部屋番号のプレフィックスを持つアクティブな接続を探すのは難しいため、
-          // 本来はシグナリングが必要ですが、今回はお互いに同じIDを狙い撃ちするか、接続要求を待ち受けます）
-          statusText.innerText = '相手の入室を待っています、または自動接続を試みています...';
-        }
-      }, 2000);
-    });
-
-    // パターンA: 相手から接続が来た場合（自分が待ち受け側）
-    peer.on('connection', (connection) => {
-      if (conn) return; // すでに接続済みなら無視
-      conn = connection;
-      setupConnection();
-    });
-
-    // パターンB: 自分から相手に接続する場合
-    // ※今回はより確実に繋ぐため、「部屋番号そのもの」をIDとして片方が待ち受け、
-    // もう片方がそこにアクセスする「ホスト・ゲスト方式」の簡易版にします。
-    // そのため、処理を分かりやすく書き換えます。
-    
-    // 【修正版アプローチ】
-    // 最初に「部屋番号」そのもののIDで作成を試みる。
-    // もしすでに使われていたら（エラーが出たら）、それは「先客（ホスト）がいる」ということなので、
-    // 自分はゲストとしてその部屋番号（ホスト）に接続を仕掛けにいきます。
-  });
-
-  // エラーハンドリング（部屋番号がすでに使われている＝先客がいる場合）
-  // 以下のコードは上記の `peer` の設定の後に割り込ませる形で、動作を最適化しています。
-  
   connectBtn.onclick = function() {
     const roomId = roomIdInput.value.trim();
     if (!roomId) return alert('部屋番号を入力してください');
@@ -119,28 +61,22 @@
     connectBtn.disabled = true;
     statusText.innerText = '接続を確立中...';
 
-    // まずは自分が「ホスト（部屋の作成者）」として部屋番号の名前のIDで登録を試みる
     peer = new Peer(roomId, { debug: 1 });
 
-    peer.on('open', (id) => {
+    peer.on('open', () => {
       statusText.innerText = `部屋（${roomId}）を作成しました。相手の入室を待っています...`;
     });
 
-    // 相手が入室してきたとき（自分がホストの場合）
     peer.on('connection', (connection) => {
       conn = connection;
       setupConnection();
     });
 
-    // もし「すでにその部屋番号（ID）が存在する」というエラーが出た場合
     peer.on('error', (err) => {
       if (err.type === 'unavailable-id') {
         statusText.innerText = '先客を検知しました。ゲストとして入室します...';
-        
-        // 自分は別のランダムなIDで入り直す
         peer = new Peer({ debug: 1 });
         peer.on('open', () => {
-          // 先客（ホスト＝部屋番号のID）に接続を申し込む
           conn = peer.connect(roomId, { reliable: true });
           setupConnection();
         });
@@ -151,46 +87,68 @@
     });
   };
 
-  // 接続が確立した後の共通処理（送受信のセットアップ）
   function setupConnection() {
     conn.on('open', () => {
       statusText.innerText = 'ステータス: P2P接続完了！ファイルを送受信できます。';
       shareSection.style.display = 'block';
+      progressText.innerText = '接続されました。ファイルの送受信を待っています。';
     });
 
+    // 受信用の一時保存配列
     let receivedChunks = [];
     let fileMeta = null;
+    let receivedSize = 0;
 
-    // データを受信したときの処理
     conn.on('data', (data) => {
-      // メタデータ（ファイル情報）を受信した場合
+      // 1. メタデータ受信時
       if (data && data.type === 'meta') {
         fileMeta = data.info;
         receivedChunks = [];
-        progressText.innerText = `受信中: ${fileMeta.name}...`;
+        receivedSize = 0;
+        progressText.innerText = `受信開始: ${fileMeta.name} (0%)`;
         return;
       }
 
-      // 終了合図を受信した場合
+      // 2. 終了合図受信時
       if (data === '===EOF===') {
-        const blob = new Blob(receivedChunks, { type: fileMeta.type });
-        const url = URL.createObjectURL(blob);
-
-        const li = document.createElement('li');
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = fileMeta.name;
-        a.innerText = `${fileMeta.name} (${(fileMeta.size / 1024 / 1024).toFixed(2)} MB) - ダウンロード`;
-        li.appendChild(a);
-        downloadList.appendChild(li);
-
-        progressText.innerText = '受信完了！';
-        alert('ファイルを受け取りました！');
+        progressText.innerText = 'ダウンロードを生成中...しばらくお待ちください。';
+        
+        // 最後に一気にBlob化（※ここでフリーズしないよう、小刻みに待って処理）
+        setTimeout(() => {
+          try {
+            const blob = new Blob(receivedChunks, { type: fileMeta.type || 'application/octet-stream' });
+            const url = URL.createObjectURL(blob);
+            
+            // 自動でダウンロードポップアップを起動させる（表示を待たせない）
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = fileMeta.name;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            
+            progressText.innerText = `受信完了・保存しました！: ${fileMeta.name}`;
+            alert(`「${fileMeta.name}」の受信が完了し、自動ダウンロードされました！`);
+            
+            // メモリ解放
+            receivedChunks = [];
+            URL.revokeObjectURL(url);
+          } catch(e) {
+            progressText.innerText = 'エラー: ブラウザのメモリ上限を超えました。別の軽量ブラウザで試すかファイルを分割してください。';
+            console.error(e);
+          }
+        }, 100);
         return;
       }
 
-      // ファイルの破片（チャンク）を配列に溜める
+      // 3. データ受信中
       receivedChunks.push(data);
+      receivedSize += data.byteLength || data.size || 0;
+      
+      if (fileMeta) {
+        const progress = ((receivedSize / fileMeta.size) * 100).toFixed(1);
+        progressText.innerText = `受信中: ${progress}% (${(receivedSize/1024/1024).toFixed(1)}MB / ${(fileMeta.size/1024/1024).toFixed(1)}MB)`;
+      }
     });
 
     conn.on('close', () => {
@@ -201,36 +159,40 @@
     });
   }
 
-  // ファイル送信処理（大容量対応・チャンク分割）
+  // 送信側
   sendBtn.addEventListener('click', () => {
     const file = fileInput.files[0];
-    if (!file || !conn) return alert('ファイルを選択、または接続を確認してください');
+    if (!file || !conn) return alert('ファイルを選択してください');
 
     sendBtn.disabled = true;
     let offset = 0;
     const reader = new FileReader();
 
-    // 1. 最初にメタデータを送信
     conn.send({
       type: 'meta',
       info: { name: file.name, size: file.size, type: file.type }
     });
 
-    // 2. チャンクを順番に読み込んで送信するループ
     reader.onload = function(e) {
-      conn.send(e.target.result); // 16KBのバイナリを送信
+      if (!conn || conn.destroyed) return;
       
+      conn.send(e.target.result);
       offset += e.target.result.byteLength;
+      
       const progress = ((offset / file.size) * 100).toFixed(1);
       progressText.innerText = `送信中: ${progress}%`;
 
       if (offset < file.size) {
-        readNextChunk();
+        // ブラウザがフリーズ（ロック）するのを防ぐため、少しだけ隙間(setTimeout)を作って次のチャンクを読む
+        if (offset % (CHUNK_SIZE * 20) === 0) {
+          setTimeout(readNextChunk, 1);
+        } else {
+          readNextChunk();
+        }
       } else {
-        // すべて送り終えたら終了合ವನ್ನು送る
         setTimeout(() => {
           conn.send('===EOF===');
-          progressText.innerText = '送信完了！';
+          progressText.innerText = '送信完了しました！';
           sendBtn.disabled = false;
         }, 500);
       }
@@ -241,7 +203,6 @@
       reader.readAsArrayBuffer(slice);
     }
 
-    // 分割送信スタート
     readNextChunk();
   });
 </script>
