@@ -2,7 +2,7 @@
 <html lang="ja">
 <head>
   <meta charset="UTF-8">
-  <title>ファイル共有</title>
+  <title>P2Pファイル共有（自動初期化・安定版）</title>
   <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
   <style>
     body { font-family: 'Helvetica Neue', Arial, sans-serif; padding: 30px; background: #f5f7fa; color: #333; user-select: none; -webkit-user-select: none; }
@@ -19,14 +19,18 @@
 <body>
 
 <div class="container">
-  <h2>P2Pファイル共有（</h2>
-  <p style="font-size: 0.9em; color: #64748b;">※同じ部屋番号を入力して接続してください。</p>
+  <h2>P2Pファイル共有（自動初期化・安定版）</h2>
+  <p style="font-size: 0.9em; color: #64748b;">※回線切断や相手が退出した場合は自動で最初の画面に戻ります。</p>
 
-  <div class="section">
+  <div class="section" id="loginSection">
     <label for="roomIdInput">部屋番号を入力：</label>
     <input type="text" id="roomIdInput" placeholder="例: room999">
     <button id="connectBtn">入室・接続する</button>
-    <p id="status">ステータス: 準備完了</p>
+  </div>
+
+  <div class="section">
+    <h3>現在のステータス</h3>
+    <p id="status">状態: 準備完了（部屋番号を入力してください）</p>
   </div>
 
   <div class="section" id="shareSection" style="display:none;">
@@ -35,100 +39,142 @@
     <button id="sendBtn">送信を開始</button>
   </div>
 
-  <div class="section">
-    <h3>現在の状況 / 進捗</h3>
+  <div class="section" id="progressSection" style="display:none;">
+    <h3>送受信の進捗</h3>
     <p id="progressText">待機中...</p>
   </div>
 </div>
 
 <script>
-  
-  // 1. 右クリックメニューを禁止
+  // ==========================================
+  // 【お守り】ソースコード表示・コピー対策
+  // ==========================================
   document.addEventListener('contextmenu', (e) => e.preventDefault());
-
-  // 2. キーボードショートカットを禁止 (F12, Ctrl+U, Ctrl+Shift+I)
   document.addEventListener('keydown', (e) => {
-    // F12キーを禁止
-    if (e.key === 'F12') {
-      e.preventDefault();
-      return false;
-    }
-    // Ctrl + Shift + I (デベロッパーツール) を禁止
-    if (e.ctrlKey && e.shiftKey && (e.key === 'I' || e.key === 'i')) {
-      e.preventDefault();
-      return false;
-    }
-    // Ctrl + U (ソースコード表示) を禁止
-    if (e.ctrlKey && (e.key === 'U' || e.key === 'u')) {
-      e.preventDefault();
-      return false;
-    }
-    // Ctrl + S (ページ保存) も念のため禁止
-    if (e.ctrlKey && (e.key === 'S' || e.key === 's')) {
+    if (e.key === 'F12' || 
+       (e.ctrlKey && e.shiftKey && (e.key === 'I' || e.key === 'i')) || 
+       (e.ctrlKey && (e.key === 'U' || e.key === 'u')) || 
+       (e.ctrlKey && (e.key === 'S' || e.key === 's'))) {
       e.preventDefault();
       return false;
     }
   });
 
-
-
+  // ==========================================
+  // P2P 安定化＆自動初期化ロジック
+  // ==========================================
   let peer = null;
   let conn = null;
   const CHUNK_SIZE = 16384; // 16KB
 
+  const loginSection = document.getElementById('loginSection');
   const connectBtn = document.getElementById('connectBtn');
   const roomIdInput = document.getElementById('roomIdInput');
   const statusText = document.getElementById('status');
   const shareSection = document.getElementById('shareSection');
+  const progressSection = document.getElementById('progressSection');
   const fileInput = document.getElementById('fileInput');
   const sendBtn = document.getElementById('sendBtn');
   const progressText = document.getElementById('progressText');
+
+  // システム全体を最初期状態に戻す「初期化」関数
+  function resetSystem(message) {
+    // 既存の通信をすべて物理的に破壊
+    if (conn) { conn.close(); conn = null; }
+    if (peer) { peer.destroy(); peer = null; }
+
+    // 画面の表示をリセット
+    loginSection.style.display = 'block';
+    shareSection.style.display = 'none';
+    progressSection.style.display = 'none';
+    connectBtn.disabled = false;
+    roomIdInput.disabled = false;
+    fileInput.value = ""; // 選択中ファイルをクリア
+    sendBtn.disabled = false;
+    
+    statusText.innerText = "状態: " + (message || "初期化されました。再度入室してください。");
+    progressText.innerText = "待機中...";
+  }
 
   connectBtn.onclick = function() {
     const roomId = roomIdInput.value.trim();
     if (!roomId) return alert('部屋番号を入力してください');
 
     connectBtn.disabled = true;
-    statusText.innerText = '接続を確立中...';
+    roomIdInput.disabled = true;
+    statusText.innerText = 'シグナリングサーバーに接続中...';
 
+    // ホスト（作成者）として部屋番号のIDで接続
     peer = new Peer(roomId, { debug: 1 });
 
     peer.on('open', () => {
       statusText.innerText = `部屋（${roomId}）を作成しました。相手の入室を待っています...`;
     });
 
+    // 相手（ゲスト）が入室してきた時（自分＝ホスト）
     peer.on('connection', (connection) => {
+      if (conn) return; // 既に誰かと繋がっていれば無視
       conn = connection;
       setupConnection();
     });
 
+    // エラーハンドリング（既に部屋が存在する場合＝自分はゲストになる）
     peer.on('error', (err) => {
       if (err.type === 'unavailable-id') {
-        statusText.innerText = '先客を検知しました。ゲストとして入室します...';
+        statusText.innerText = '先客を検知しました。ゲストとして入室を試みます...';
+        
+        // 自分のIDをランダムにして再生成
         peer = new Peer({ debug: 1 });
         peer.on('open', () => {
+          // ホストに接続を仕掛ける
           conn = peer.connect(roomId, { reliable: true });
           setupConnection();
         });
+        
+        peer.on('error', (gErr) => {
+          resetSystem('ゲスト接続エラーが発生しました。: ' + gErr.type);
+        });
       } else {
-        statusText.innerText = 'エラーが発生しました: ' + err.type;
-        connectBtn.disabled = false;
+        resetSystem('エラーが発生したため初期化しました: ' + err.type);
       }
     });
   };
 
+  // 接続が繋がったあとの双方向通信＆切断監視処理
   function setupConnection() {
+    // 相手が切断した時の監視（通常の切断）
+    conn.on('close', () => {
+      resetSystem('相手が退出したか、接続が切れました。ルームを初期化しました。');
+    });
+
+    // エラーで落ちた時の監視
+    conn.on('error', (err) => {
+      resetSystem('通信エラーが発生したため初期化しました。');
+    });
+
     conn.on('open', () => {
-      statusText.innerText = 'ステータス: P2P接続完了！ファイルを送受信できます。';
-      shareSection.style.style.display = 'block';
-      progressText.innerText = '接続されました。ファイルの送受信を待っています。';
+      statusText.innerText = 'ステータス: P2P接続中（同期を確認しています...）';
+      // 双方向で確実に繋ぐため、接続がオープンしたらお互いに「PING」を送り合う
+      conn.send({ type: 'system-ping' });
     });
 
     let receivedChunks = [];
     let fileMeta = null;
     let receivedSize = 0;
 
+    // データ受信
     conn.on('data', (data) => {
+      // 【バグ対策】双方向同期のためのシステムメッセージ処理
+      if (data && data.type === 'system-ping') {
+        loginSection.style.display = 'none';
+        shareSection.style.display = 'block';
+        progressSection.style.display = 'block';
+        statusText.innerText = 'ステータス: 双方向P2P接続完了！送受信可能です。';
+        progressText.innerText = 'お互いの接続を確認しました。ファイルの選択を待っています。';
+        return;
+      }
+
+      // 1. ファイルのメタデータを受信
       if (data && data.type === 'meta') {
         fileMeta = data.info;
         receivedChunks = [];
@@ -137,8 +183,9 @@
         return;
       }
 
+      // 2. 終了合図を受信
       if (data === '===EOF===') {
-        progressText.innerText = 'ダウンロードを生成中...';
+        progressText.innerText = 'ダウンロードファイルを生成中...';
         
         setTimeout(() => {
           try {
@@ -152,19 +199,18 @@
             a.click();
             document.body.removeChild(a);
             
-            progressText.innerText = `受信完了・保存しました！: ${fileMeta.name}`;
-            alert(`「${fileMeta.name}」を受信し、自動ダウンロードしました！`);
+            progressText.innerText = `受信完了・自動保存しました: ${fileMeta.name}`;
             
             receivedChunks = [];
             URL.revokeObjectURL(url);
           } catch(e) {
             progressText.innerText = 'エラー: ブラウザのメモリ上限を超えました。';
-            console.error(e);
           }
         }, 100);
         return;
       }
 
+      // 3. 通常のデータ受信
       receivedChunks.push(data);
       receivedSize += data.byteLength || data.size || 0;
       
@@ -173,15 +219,9 @@
         progressText.innerText = `受信中: ${progress}% (${(receivedSize/1024/1024).toFixed(1)}MB / ${(fileMeta.size/1024/1024).toFixed(1)}MB)`;
       }
     });
-
-    conn.on('close', () => {
-      statusText.innerText = '接続が切断されました。';
-      shareSection.style.display = 'none';
-      connectBtn.disabled = false;
-      roomIdInput.disabled = false;
-    });
   }
 
+  // 送信側の処理
   sendBtn.addEventListener('click', () => {
     const file = fileInput.files[0];
     if (!file || !conn) return alert('ファイルを選択してください');
@@ -190,13 +230,14 @@
     let offset = 0;
     const reader = new FileReader();
 
+    // 最初に対象ファイルの情報を送信
     conn.send({
       type: 'meta',
       info: { name: file.name, size: file.size, type: file.type }
     });
 
     reader.onload = function(e) {
-      if (!conn || conn.destroyed) return;
+      if (!conn) return; // すでに初期化されていれば中止
       
       conn.send(e.target.result);
       offset += e.target.result.byteLength;
@@ -212,7 +253,7 @@
         }
       } else {
         setTimeout(() => {
-          conn.send('===EOF===');
+          if (conn) conn.send('===EOF===');
           progressText.innerText = '送信完了しました！';
           sendBtn.disabled = false;
         }, 500);
@@ -220,6 +261,7 @@
     };
 
     function readNextChunk() {
+      if (!conn) return;
       const slice = file.slice(offset, offset + CHUNK_SIZE);
       reader.readAsArrayBuffer(slice);
     }
